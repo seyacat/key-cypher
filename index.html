@@ -240,6 +240,17 @@
         .type-directory {
             background-color: #FF9800;
         }
+
+        .disclaimer {
+            color: #f44336;
+            font-size: 12px;
+            margin-top: 10px;
+            margin-bottom: 15px;
+            padding: 8px;
+            background-color: rgba(244, 67, 54, 0.1);
+            border-radius: 4px;
+            border-left: 3px solid #f44336;
+        }
     </style>
 </head>
 <body>
@@ -247,6 +258,13 @@
         <header>
             <h1>Key Cypher</h1>
             <p>Scan and encrypt vulnerable credential files</p>
+            <div class="disclaimer">
+                <strong>WARNING:</strong> Always maintain secure backups of your files before encryption.
+                Loss of encryption key or file corruption may result in permanent data loss.
+                <br>
+                <strong>PRIVACY:</strong> This application does not store any data, only file paths.
+                It does not connect to the internet and all operations are performed locally.
+            </div>
             
             <div class="key-input-section">
                 <input type="password" id="encryptionKey" class="key-input" placeholder="Enter encryption key..." />

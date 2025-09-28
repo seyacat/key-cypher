@@ -6,7 +6,11 @@
   "scripts": {
     "start": "electron .",
     "dev": "nodemon --watch . --exec \"electron .\" --ext js,html,css",
-    "build": "electron-builder"
+    "build": "electron-builder",
+    "build:win": "electron-builder --win",
+    "build:mac": "electron-builder --mac",
+    "build:linux": "electron-builder --linux",
+    "build:all": "electron-builder -wml"
   },
   "keywords": [
     "electron",
@@ -18,10 +22,45 @@
   "license": "MIT",
   "devDependencies": {
     "electron": "^28.3.3",
-    "nodemon": "^3.1.10"
+    "nodemon": "^3.1.10",
+    "electron-builder": "^24.13.3"
   },
   "dependencies": {
     "archiver": "^7.0.1",
     "unzipper": "^0.12.3"
+  },
+  "build": {
+    "appId": "com.keycypher.app",
+    "productName": "keycypher",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer.js",
+      "index.html",
+      "package.json",
+      "node_modules/**/*"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "artifactName": "${productName}-${version}-setup.${ext}"
+    },
+    "mac": {
+      "target": "dmg",
+      "icon": "icon.icns"
+    },
+    "linux": {
+      "target": "AppImage",
+      "icon": "icon.png"
+    }
   }
 }
