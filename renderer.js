@@ -22,6 +22,10 @@ class KeyCypherApp {
             this.addDirectory();
         });
 
+        document.getElementById('refreshBtn').addEventListener('click', () => {
+            this.refreshFileList();
+        });
+
         // Allow Enter key to set encryption key
         document.getElementById('encryptionKey').addEventListener('keypress', (e) => {
             if (e.key === 'Enter') {
@@ -43,11 +47,6 @@ class KeyCypherApp {
     }
 
     async scanVulnerableLocations() {
-        if (!this.encryptionKey) {
-            this.showMessage('Please set an encryption key first', 'error');
-            return;
-        }
-
         try {
             this.showLoading();
             const files = await window.electronAPI.scanVulnerableLocations();
@@ -60,11 +59,6 @@ class KeyCypherApp {
     }
 
     async addFile() {
-        if (!this.encryptionKey) {
-            this.showMessage('Please set an encryption key first', 'error');
-            return;
-        }
-
         try {
             const selectedFile = await window.electronAPI.selectFile();
             if (selectedFile) {
@@ -79,11 +73,6 @@ class KeyCypherApp {
     }
 
     async addDirectory() {
-        if (!this.encryptionKey) {
-            this.showMessage('Please set an encryption key first', 'error');
-            return;
-        }
-
         try {
             const selectedDirectory = await window.electronAPI.selectDirectory();
             if (selectedDirectory) {
@@ -111,7 +100,12 @@ class KeyCypherApp {
                 // Update the file list to reflect the change
                 await this.updateFileAfterOperation(filePath, result.encryptedPath, true);
             } else {
-                this.showMessage('Encryption failed: ' + result.error, 'error');
+                // Show user-friendly error message
+                let errorMessage = 'Encryption failed';
+                if (result.error) {
+                    errorMessage = 'Encryption failed: ' + result.error;
+                }
+                this.showMessage(errorMessage, 'error');
             }
         } catch (error) {
             this.showMessage('Encryption error: ' + error.message, 'error');
@@ -131,14 +125,44 @@ class KeyCypherApp {
                 // Update the file list to reflect the change
                 await this.updateFileAfterOperation(filePath, result.decryptedPath, false);
             } else {
-                this.showMessage('Decryption failed: ' + result.error, 'error');
+                // Show user-friendly error message
+                let errorMessage = 'Decryption failed';
+                if (result.error && result.error.includes('BAD_DECRYPT')) {
+                    errorMessage = 'Invalid encryption key. Please check your key and try again.';
+                } else if (result.error) {
+                    errorMessage = 'Decryption failed: ' + result.error;
+                }
+                this.showMessage(errorMessage, 'error');
             }
         } catch (error) {
             this.showMessage('Decryption error: ' + error.message, 'error');
         }
     }
 
-    renderFileTable() {
+    async removeFile(filePath) {
+        try {
+            const result = await window.electronAPI.removeFileFromList(filePath);
+            if (result.success) {
+                // Remove from local file list
+                const normalizePath = (path) => path.replace(/\\/g, '/');
+                const normalizedFilePath = normalizePath(filePath);
+                
+                this.files = this.files.filter(file => {
+                    const normalizedCurrentPath = normalizePath(file.path);
+                    return normalizedCurrentPath !== normalizedFilePath;
+                });
+                
+                this.renderFileTable();
+                this.showMessage('File removed from list', 'success');
+            } else {
+                this.showMessage('Error removing file: ' + result.error, 'error');
+            }
+        } catch (error) {
+            this.showMessage('Error removing file: ' + error.message, 'error');
+        }
+    }
+
+    async renderFileTable() {
         const tableBody = document.getElementById('fileTableBody');
         
         if (this.files.length === 0) {
@@ -146,7 +170,31 @@ class KeyCypherApp {
             return;
         }
 
-        tableBody.innerHTML = this.files.map(file => `
+        // Remove duplicates and sort alphabetically
+        const uniqueFiles = this.removeDuplicates(this.files);
+        const sortedFiles = this.sortFilesAlphabetically(uniqueFiles);
+
+        // Check file status for each file
+        const filesWithStatus = await Promise.all(
+            sortedFiles.map(async (file) => {
+                try {
+                    const status = await window.electronAPI.checkFileStatus(file.path);
+                    return { ...file, status };
+                } catch (error) {
+                    console.log('Error checking file status:', error);
+                    return { ...file, status: { exists: false, status: 'ERROR', hasConflict: false } };
+                }
+            })
+        );
+
+        tableBody.innerHTML = filesWithStatus.map(file => {
+            const statusClass = this.getStatusClass(file);
+            const statusText = this.getStatusText(file);
+            const hasConflict = file.status.hasConflict;
+            const isMissing = file.status.status === 'MISSING';
+            const buttonsDisabled = (hasConflict || isMissing) ? 'disabled' : '';
+            
+            return `
             <tr>
                 <td>${this.formatPath(file.path)}</td>
                 <td>
@@ -155,28 +203,75 @@ class KeyCypherApp {
                     </span>
                 </td>
                 <td>
-                    <span class="status-${file.encrypted ? 'encrypted' : 'decrypted'}">
-                        ${file.encrypted ? 'ENCRYPTED' : 'DECRYPTED'}
+                    <span class="${statusClass}">
+                        ${statusText}
                     </span>
                 </td>
                 <td class="actions">
-                    ${!file.encrypted ? 
-                        `<button class="action-btn btn-primary" onclick="app.encryptFile('${this.escapePath(file.path)}')">
-                            Encrypt
-                        </button>` : 
-                        `<button class="action-btn btn-secondary" onclick="app.decryptFile('${this.escapePath(file.path)}')">
-                            Decrypt
-                        </button>`
-                    }
+                    <button class="action-btn btn-primary"
+                            onclick="app.encryptFile('${this.escapePath(file.path)}')"
+                            ${file.encrypted ? 'disabled' : ''} ${buttonsDisabled}>
+                        Encrypt
+                    </button>
+                    <button class="action-btn btn-secondary"
+                            onclick="app.decryptFile('${this.escapePath(file.path)}')"
+                            ${!file.encrypted ? 'disabled' : ''} ${buttonsDisabled}>
+                        Decrypt
+                    </button>
+                    <button class="action-btn btn-info" onclick="app.openInExplorer('${this.escapePath(file.path)}')">
+                        Open
+                    </button>
+                    <button class="action-btn btn-danger" onclick="app.removeFile('${this.escapePath(file.path)}')">
+                        Remove
+                    </button>
                 </td>
             </tr>
-        `).join('');
+        `}).join('');
+    }
+
+    removeDuplicates(files) {
+        const seen = new Set();
+        return files.filter(file => {
+            const normalizedPath = file.path.replace(/\\/g, '/').toLowerCase();
+            if (seen.has(normalizedPath)) {
+                return false;
+            }
+            seen.add(normalizedPath);
+            return true;
+        });
+    }
+
+    sortFilesAlphabetically(files) {
+        return files.sort((a, b) => {
+            const pathA = a.path.replace(/\\/g, '/').toLowerCase();
+            const pathB = b.path.replace(/\\/g, '/').toLowerCase();
+            return pathA.localeCompare(pathB);
+        });
+    }
+
+    getStatusClass(file) {
+        if (file.status.status === 'MISSING') {
+            return 'status-missing';
+        } else if (file.status.status === 'CONFLICT') {
+            return 'status-conflict';
+        } else {
+            return file.encrypted ? 'status-encrypted' : 'status-decrypted';
+        }
+    }
+
+    getStatusText(file) {
+        if (file.status.status === 'MISSING') {
+            return 'MISSING';
+        } else if (file.status.status === 'CONFLICT') {
+            return 'CONFLICT';
+        } else {
+            return file.encrypted ? 'ENCRYPTED' : 'DECRYPTED';
+        }
     }
 
     formatPath(fullPath) {
-        // For display purposes, we'll just show the full path
-        // In a real implementation, we could get the home directory from main process
-        return fullPath;
+        // Normalize path to use forward slashes consistently
+        return fullPath.replace(/\\/g, '/');
     }
 
     escapePath(path) {
@@ -200,7 +295,7 @@ class KeyCypherApp {
         });
         
         // Add the new file to the list
-        const fileType = newPath.endsWith('_cyphered.zip') ? 'directory' :
+        const fileType = newPath.endsWith('_cypheredd.zip') ? 'directory' :
                         newPath.includes('_cyphered') ? 'file' : 'file';
         
         this.files.push({
@@ -218,6 +313,43 @@ class KeyCypherApp {
         
         this.renderFileTable();
         console.log('Successfully updated file in table');
+    }
+
+    async openInExplorer(filePath) {
+        try {
+            const result = await window.electronAPI.openFileInExplorer(filePath);
+            if (result.success) {
+                this.showMessage('Opened file location in explorer', 'success');
+            } else {
+                this.showMessage('Error opening file location: ' + result.error, 'error');
+            }
+        } catch (error) {
+            this.showMessage('Error opening file location: ' + error.message, 'error');
+        }
+    }
+
+    async refreshFileList() {
+        try {
+            this.showLoading();
+            // Reload files from persistent storage and update status
+            const files = await window.electronAPI.loadFilesOnStartup();
+            if (files && files.length > 0) {
+                // Re-detect file types based on suffixes for encrypted files
+                this.files = files.map(file => ({
+                    ...file,
+                    type: file.path.endsWith('_cypheredd.zip') ? 'directory' :
+                          file.path.includes('_cyphered') ? 'file' : file.type
+                }));
+                await this.renderFileTable();
+                this.showMessage('File list refreshed', 'success');
+            } else {
+                this.files = [];
+                this.renderFileTable();
+                this.showMessage('No files found in list', 'info');
+            }
+        } catch (error) {
+            this.showMessage('Error refreshing file list: ' + error.message, 'error');
+        }
     }
 
     showMessage(message, type) {

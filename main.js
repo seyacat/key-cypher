@@ -1,7 +1,73 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const fsPromises = require('fs').promises;
 const crypto = require('crypto');
+const archiver = require('archiver');
+const unzipper = require('unzipper');
+
+// Helper function to delay execution
+function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// Helper function to retry an operation with delay
+async function retryOperation(operation, maxRetries = 3, delayMs = 100) {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await operation();
+    } catch (error) {
+      if (attempt === maxRetries) {
+        throw error;
+      }
+      console.log(`Retry attempt ${attempt} failed, waiting ${delayMs}ms before next attempt`);
+      await delay(delayMs);
+    }
+  }
+}
+
+// Helper function to delete files/directories
+async function deleteFileOrDirectory(filePath) {
+  try {
+    const stats = await fsPromises.stat(filePath);
+    
+    if (stats.isDirectory()) {
+      // For directories, delete recursively
+      await deleteDirectoryRecursive(filePath);
+    } else {
+      // For files, use fs.unlink
+      await fsPromises.unlink(filePath);
+    }
+    return true;
+  } catch (error) {
+    console.error('Error deleting file/directory:', error);
+    throw error;
+  }
+}
+
+// Helper function to delete directories recursively
+async function deleteDirectoryRecursive(dirPath) {
+  try {
+    const items = await fsPromises.readdir(dirPath);
+    
+    for (const item of items) {
+      const fullPath = path.join(dirPath, item);
+      const stats = await fsPromises.stat(fullPath);
+      
+      if (stats.isDirectory()) {
+        await deleteDirectoryRecursive(fullPath);
+      } else {
+        await fsPromises.unlink(fullPath);
+      }
+    }
+    
+    // After deleting all contents, delete the directory itself
+    await fsPromises.rmdir(dirPath);
+  } catch (error) {
+    console.error('Error deleting directory recursively:', error);
+    throw error;
+  }
+}
 
 let mainWindow;
 const userDataPath = app.getPath('userData');
@@ -40,6 +106,34 @@ app.on('activate', () => {
 });
 
 // Helper functions for persistent file storage
+function checkFilePermissions(filePath) {
+    try {
+        const stats = fs.statSync(filePath);
+        const permissions = {
+            readable: true, // We can read it
+            writable: false,
+            deletable: true // Assume deletable by default
+        };
+        
+        // Check if we can write to the file
+        try {
+            fs.accessSync(filePath, fs.constants.W_OK);
+            permissions.writable = true;
+        } catch (e) {
+            permissions.writable = false;
+        }
+        
+        return permissions;
+    } catch (error) {
+        return {
+            readable: false,
+            writable: false,
+            deletable: false,
+            error: error.message
+        };
+    }
+}
+
 function saveFilesList(files) {
     try {
         console.log('Saving files list to:', filesListPath);
@@ -89,35 +183,62 @@ ipcMain.handle('scan-vulnerable-locations', async () => {
   const persistentFiles = loadFilesList();
   console.log('Loaded persistent files:', persistentFiles.length);
   
-  const vulnerableLocations = [];
+  const vulnerableFiles = [];
   const homeDir = process.env.HOME || process.env.USERPROFILE;
   
-  // Default vulnerable locations
-  const defaultLocations = [
-    path.join(homeDir, '.ssh'),
-    path.join(homeDir, '.aws'),
+  // Scan for specific files in vulnerable directories
+  const scanDirectories = [
+    {
+      dir: path.join(homeDir, '.aws'),
+      files: ['credentials']
+    },
+    {
+      dir: path.join(homeDir, '.ssh'),
+      files: ['id_rsa', 'id_dsa', 'id_ecdsa', 'id_ed25519', 'authorized_keys']
+    }
+  ];
+  
+  // Single files to check
+  const singleFiles = [
     path.join(homeDir, '.git-credentials'),
     path.join(homeDir, '.config', 'gh', 'hosts.yml')
   ];
   
-  for (const location of defaultLocations) {
-    if (fs.existsSync(location)) {
-      vulnerableLocations.push({
-        path: location,
-        type: fs.statSync(location).isDirectory() ? 'directory' : 'file',
-        encrypted: location.includes('_cyphered')
+  // Scan directories for specific files
+  for (const scanDir of scanDirectories) {
+    if (fs.existsSync(scanDir.dir) && fs.statSync(scanDir.dir).isDirectory()) {
+      for (const fileName of scanDir.files) {
+        const filePath = path.join(scanDir.dir, fileName);
+        if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
+          vulnerableFiles.push({
+            path: filePath,
+            type: 'file',
+            encrypted: filePath.includes('_cyphered')
+          });
+        }
+      }
+    }
+  }
+  
+  // Check single files
+  for (const filePath of singleFiles) {
+    if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
+      vulnerableFiles.push({
+        path: filePath,
+        type: 'file',
+        encrypted: filePath.includes('_cyphered')
       });
     }
   }
   
   // If we have persistent files, use them as the primary source
-  // Otherwise, use the scanned vulnerable locations
+  // Otherwise, use the scanned vulnerable files
   if (persistentFiles.length > 0) {
     console.log('Returning persistent files');
     return persistentFiles;
   } else {
-    console.log('Returning scanned vulnerable locations');
-    return vulnerableLocations;
+    console.log('Returning scanned vulnerable files:', vulnerableFiles.length);
+    return vulnerableFiles;
   }
 });
 
@@ -142,39 +263,75 @@ ipcMain.handle('add-custom-path', async (event, customPath) => {
 });
 
 ipcMain.handle('encrypt-file', async (event, filePath, key) => {
+  let encryptedPath = null;
   try {
     console.log('Encrypting file:', filePath);
-    if (!fs.existsSync(filePath)) {
+    
+    // Check if file exists using async method
+    try {
+      await fsPromises.access(filePath);
+    } catch (error) {
       console.log('File does not exist at path:', filePath);
       throw new Error('File does not exist');
     }
     
-    const stats = fs.statSync(filePath);
-    let encryptedPath;
+    // Check basic permissions before proceeding
+    const permissions = checkFilePermissions(filePath);
+    console.log('File permissions:', permissions);
+    
+    const stats = await fsPromises.stat(filePath);
     
     if (stats.isDirectory()) {
-      // For directories, create a zip first then encrypt
+      // For directories: compress to ZIP first, then encrypt the ZIP
       const zipPath = filePath + '.zip';
-      // In a real implementation, you would use a zip library here
-      // For now, we'll simulate the process
-      encryptedPath = filePath + '_cyphered.zip';
+      encryptedPath = filePath + '_cypheredd.zip';
       
-      // Simulate directory encryption by creating a marker file
-      fs.writeFileSync(encryptedPath, 'Encrypted directory content');
+      // Create ZIP archive
+      await new Promise((resolve, reject) => {
+        const output = fs.createWriteStream(zipPath);
+        const archive = archiver('zip', {
+          zlib: { level: 9 } // Maximum compression
+        });
+        
+        output.on('close', resolve);
+        archive.on('error', reject);
+        
+        archive.pipe(output);
+        archive.directory(filePath, false);
+        archive.finalize();
+      });
+      
+      // Encrypt the ZIP file
+      const zipContent = await fsPromises.readFile(zipPath);
+      const algorithm = 'aes-256-cbc';
+      const iv = crypto.randomBytes(16);
+      const cipher = crypto.createCipher(algorithm, key);
+      let encryptedContent = cipher.update(zipContent, 'binary', 'hex');
+      encryptedContent += cipher.final('hex');
+      await fsPromises.writeFile(encryptedPath, iv.toString('hex') + ':' + encryptedContent);
+      
+      // Remove temporary ZIP file
+      await fsPromises.unlink(zipPath);
     } else {
       // For files, encrypt directly
-      const fileContent = fs.readFileSync(filePath, 'utf8');
+      const fileContent = await fsPromises.readFile(filePath, 'utf8');
       const algorithm = 'aes-256-cbc';
       const iv = crypto.randomBytes(16);
       const cipher = crypto.createCipher(algorithm, key);
       let encryptedContent = cipher.update(fileContent, 'utf8', 'hex');
       encryptedContent += cipher.final('hex');
       encryptedPath = filePath.replace(/(\.[^/.]+)?$/, '_cyphered$&');
-      fs.writeFileSync(encryptedPath, iv.toString('hex') + ':' + encryptedContent);
+      await fsPromises.writeFile(encryptedPath, iv.toString('hex') + ':' + encryptedContent);
     }
     
+    // Add delay before attempting to delete the original file
+    console.log('Waiting 500ms before deleting original file...');
+    await delay(500);
+    
     // Remove original file after encryption
-    fs.unlinkSync(filePath);
+    await deleteFileOrDirectory(filePath);
+    
+    console.log('Original file successfully deleted');
     
     return {
       originalPath: filePath,
@@ -182,6 +339,17 @@ ipcMain.handle('encrypt-file', async (event, filePath, key) => {
       success: true
     };
   } catch (error) {
+    // Rollback: if encrypted file was created but original couldn't be deleted, remove the encrypted file
+    if (encryptedPath) {
+      try {
+        await fsPromises.access(encryptedPath);
+        await fsPromises.unlink(encryptedPath);
+        console.log('Rollback: removed encrypted file due to error:', encryptedPath);
+      } catch (rollbackError) {
+        console.error('Rollback failed for encrypted file:', rollbackError);
+      }
+    }
+    
     return {
       success: false,
       error: error.message
@@ -190,23 +358,54 @@ ipcMain.handle('encrypt-file', async (event, filePath, key) => {
 });
 
 ipcMain.handle('decrypt-file', async (event, filePath, key) => {
+  let decryptedPath = null;
   try {
-    if (!fs.existsSync(filePath)) {
+    // Check if file exists using async method
+    try {
+      await fsPromises.access(filePath);
+    } catch (error) {
       throw new Error('File does not exist');
     }
     
-    const stats = fs.statSync(filePath);
-    let decryptedPath;
+    const stats = await fsPromises.stat(filePath);
     
-    if (stats.isDirectory() || filePath.endsWith('_cyphered.zip')) {
-      // For encrypted directories
-      decryptedPath = filePath.replace('_cyphered.zip', '');
-      // In a real implementation, you would decrypt and unzip here
-      // For now, we'll simulate the process
-      fs.writeFileSync(decryptedPath, 'Decrypted directory content');
+    if (filePath.endsWith('_cypheredd.zip')) {
+      // For encrypted directories: decrypt the ZIP, then extract
+      decryptedPath = filePath.replace('_cypheredd.zip', '');
+      
+      // Decrypt the ZIP file
+      const encryptedData = await fsPromises.readFile(filePath);
+      const parts = encryptedData.toString().split(':');
+      if (parts.length !== 2) {
+        throw new Error('Invalid encrypted directory format');
+      }
+      
+      const iv = Buffer.from(parts[0], 'hex');
+      const encryptedContent = parts[1];
+      const algorithm = 'aes-256-cbc';
+      const decipher = crypto.createDecipher(algorithm, key);
+      decipher.setAutoPadding(true);
+      
+      let decryptedZipContent = decipher.update(encryptedContent, 'hex', 'binary');
+      decryptedZipContent += decipher.final('binary');
+      
+      // Write decrypted ZIP to temporary file
+      const tempZipPath = filePath.replace('_cypheredd.zip', '_temp.zip');
+      await fsPromises.writeFile(tempZipPath, decryptedZipContent, 'binary');
+      
+      // Extract ZIP to destination
+      await new Promise((resolve, reject) => {
+        fs.createReadStream(tempZipPath)
+          .pipe(unzipper.Extract({ path: decryptedPath }))
+          .on('close', resolve)
+          .on('error', reject);
+      });
+      
+      // Remove temporary ZIP file
+      await fsPromises.unlink(tempZipPath);
     } else {
       // For encrypted files
-      const encryptedData = fs.readFileSync(filePath, 'utf8');
+      const encryptedData = await fsPromises.readFile(filePath, 'utf8');
       const parts = encryptedData.split(':');
       if (parts.length !== 2) {
         throw new Error('Invalid encrypted file format');
@@ -226,11 +425,17 @@ ipcMain.handle('decrypt-file', async (event, filePath, key) => {
       }
       
       decryptedPath = filePath.replace('_cyphered', '');
-      fs.writeFileSync(decryptedPath, decryptedContent);
+      await fsPromises.writeFile(decryptedPath, decryptedContent);
     }
     
+    // Add delay before attempting to delete the encrypted file
+    console.log('Waiting 500ms before deleting encrypted file...');
+    await delay(500);
+    
     // Remove encrypted file after decryption
-    fs.unlinkSync(filePath);
+    await deleteFileOrDirectory(filePath);
+    
+    console.log('Encrypted file successfully deleted');
     
     return {
       encryptedPath: filePath,
@@ -238,6 +443,17 @@ ipcMain.handle('decrypt-file', async (event, filePath, key) => {
       success: true
     };
   } catch (error) {
+    // Rollback: if decrypted file was created but encrypted couldn't be deleted, remove the decrypted file
+    if (decryptedPath) {
+      try {
+        await fsPromises.access(decryptedPath);
+        await fsPromises.unlink(decryptedPath);
+        console.log('Rollback: removed decrypted file due to error:', decryptedPath);
+      } catch (rollbackError) {
+        console.error('Rollback failed for decrypted file:', rollbackError);
+      }
+    }
+    
     return {
       success: false,
       error: error.message
@@ -282,10 +498,14 @@ ipcMain.handle('update-file-list', async (event, oldPath, newPath, isEncrypted) 
       return normalizedFilePath !== normalizedOldPath;
     });
     
-    // Add the new file to the list
+    // Add the new file to the list - use suffix-based detection for encrypted files
+    const fileType = newPath.endsWith('_cypheredd.zip') ? 'directory' :
+                    newPath.includes('_cyphered') ? 'file' :
+                    fs.statSync(newPath).isDirectory() ? 'directory' : 'file';
+    
     const fileInfo = {
       path: newPath,
-      type: fs.statSync(newPath).isDirectory() ? 'directory' : 'file',
+      type: fileType,
       encrypted: isEncrypted
     };
     
@@ -295,6 +515,96 @@ ipcMain.handle('update-file-list', async (event, oldPath, newPath, isEncrypted) 
     return { success: true };
   } catch (error) {
     console.error('Error updating file list:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('remove-file-from-list', async (event, filePath) => {
+  try {
+    const persistentFiles = loadFilesList();
+    
+    // Normalize paths for comparison (handle both / and \ separators)
+    const normalizePath = (path) => path.replace(/\\/g, '/');
+    const normalizedFilePath = normalizePath(filePath);
+    
+    // Remove the file from the list (handle both separators)
+    const updatedFiles = persistentFiles.filter(file => {
+      const normalizedCurrentPath = normalizePath(file.path);
+      return normalizedCurrentPath !== normalizedFilePath;
+    });
+    
+    saveFilesList(updatedFiles);
+    
+    return { success: true };
+  } catch (error) {
+    console.error('Error removing file from list:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// IPC handler to check file status and detect conflicts
+ipcMain.handle('check-file-status', async (event, filePath) => {
+  try {
+    const exists = fs.existsSync(filePath);
+    let status = 'OK';
+    let hasConflict = false;
+    
+    if (!exists) {
+      status = 'MISSING';
+    } else {
+      // Check for file pair conflicts
+      if (filePath.includes('_cyphered')) {
+        // This is an encrypted file, check if original exists
+        const originalPath = filePath.replace('_cyphered', '');
+        if (fs.existsSync(originalPath)) {
+          status = 'CONFLICT';
+          hasConflict = true;
+        }
+      } else {
+        // This is an original file, check if encrypted version exists
+        const encryptedPath = filePath.replace(/(\.[^/.]+)?$/, '_cyphered$&');
+        if (fs.existsSync(encryptedPath)) {
+          status = 'CONFLICT';
+          hasConflict = true;
+        }
+      }
+    }
+    
+    return {
+      exists: exists,
+      status: status,
+      hasConflict: hasConflict
+    };
+  } catch (error) {
+    console.error('Error checking file status:', error);
+    return {
+      exists: false,
+      status: 'ERROR',
+      hasConflict: false,
+      error: error.message
+    };
+  }
+});
+
+// IPC handler to open file in explorer
+ipcMain.handle('open-file-in-explorer', async (event, filePath) => {
+  try {
+    // Check if file exists
+    if (fs.existsSync(filePath)) {
+      // Open the file directly - this will select it in Windows Explorer
+      shell.showItemInFolder(filePath);
+    } else {
+      // If file doesn't exist, try to open the parent directory
+      const directory = path.dirname(filePath);
+      if (fs.existsSync(directory)) {
+        shell.openPath(directory);
+      } else {
+        throw new Error('Directory does not exist');
+      }
+    }
+    return { success: true };
+  } catch (error) {
+    console.error('Error opening file in explorer:', error);
     return { success: false, error: error.message };
   }
 });

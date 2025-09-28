@@ -134,7 +134,17 @@
         }
 
         .status-decrypted {
-            color: #2196F3;
+            color: #f44336;
+            font-weight: bold;
+        }
+
+        .status-missing {
+            color: #FF9800;
+            font-weight: bold;
+        }
+
+        .status-conflict {
+            color: #f44336;
             font-weight: bold;
         }
 
@@ -151,10 +161,33 @@
             font-size: 12px;
         }
 
+        .action-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .btn-info {
+            background-color: #2196F3;
+            color: white;
+        }
+
+        .btn-info:hover {
+            background-color: #1976D2;
+        }
+
         .loading {
             text-align: center;
             padding: 20px;
             color: #888;
+        }
+
+        #messageArea {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 1000;
+            pointer-events: none;
         }
 
         .error {
@@ -162,7 +195,9 @@
             color: white;
             padding: 10px;
             border-radius: 4px;
-            margin-bottom: 10px;
+            margin: 10px;
+            text-align: center;
+            pointer-events: auto;
         }
 
         .success {
@@ -170,7 +205,9 @@
             color: white;
             padding: 10px;
             border-radius: 4px;
-            margin-bottom: 10px;
+            margin: 10px;
+            text-align: center;
+            pointer-events: auto;
         }
 
         .custom-path-section {
@@ -221,6 +258,7 @@
             <button id="scanBtn" class="btn btn-primary">Scan Vulnerable Locations</button>
             <button id="addFileBtn" class="btn btn-secondary">Add File</button>
             <button id="addDirectoryBtn" class="btn btn-secondary">Add Directory</button>
+            <button id="refreshBtn" class="btn btn-info">Refresh List</button>
         </div>
 
         <div id="messageArea"></div>

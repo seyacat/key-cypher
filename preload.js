@@ -8,5 +8,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   decryptFile: (filePath, key) => ipcRenderer.invoke('decrypt-file', filePath, key),
   selectFile: () => ipcRenderer.invoke('select-file'),
   selectDirectory: () => ipcRenderer.invoke('select-directory'),
-  updateFileList: (oldPath, newPath, isEncrypted) => ipcRenderer.invoke('update-file-list', oldPath, newPath, isEncrypted)
+  updateFileList: (oldPath, newPath, isEncrypted) => ipcRenderer.invoke('update-file-list', oldPath, newPath, isEncrypted),
+  removeFileFromList: (filePath) => ipcRenderer.invoke('remove-file-from-list', filePath),
+  checkFileStatus: (filePath) => ipcRenderer.invoke('check-file-status', filePath),
+  openFileInExplorer: (filePath) => ipcRenderer.invoke('open-file-in-explorer', filePath)
 });
