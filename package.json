@@ -1,0 +1,23 @@
+{
+  "name": "key-cypher",
+  "version": "1.0.0",
+  "description": "Electron application for scanning and encrypting vulnerable credential files",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "build": "electron-builder"
+  },
+  "keywords": [
+    "electron",
+    "security",
+    "encryption",
+    "credentials"
+  ],
+  "author": "Key Cypher",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^28.3.3"
+  },
+  "dependencies": {}
+}
