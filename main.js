@@ -84,6 +84,9 @@ function createWindow() {
     }
   });
 
+  // Remove the menu bar
+  mainWindow.setMenuBarVisibility(false);
+
   mainWindow.loadFile('index.html');
   
   if (process.argv.includes('--dev')) {
