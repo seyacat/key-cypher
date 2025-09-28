@@ -35,6 +35,11 @@ For development with DevTools:
 npm run dev
 ```
 
+For development with auto-reload on file changes:
+```bash
+npm run watch
+```
+
 ## Usage
 
 1. **Set Encryption Key**: Enter your encryption key in the top input field and click "Set Key"

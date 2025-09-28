@@ -4,6 +4,8 @@ const fs = require('fs');
 const crypto = require('crypto');
 
 let mainWindow;
+const userDataPath = app.getPath('userData');
+const filesListPath = path.join(userDataPath, 'files.json');
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -37,8 +39,56 @@ app.on('activate', () => {
   }
 });
 
+// Helper functions for persistent file storage
+function saveFilesList(files) {
+    try {
+        console.log('Saving files list to:', filesListPath);
+        console.log('Files to save:', files);
+        fs.writeFileSync(filesListPath, JSON.stringify(files, null, 2));
+        console.log('Files list saved successfully');
+        return true;
+    } catch (error) {
+        console.error('Error saving files list:', error);
+        return false;
+    }
+}
+
+function loadFilesList() {
+    try {
+        console.log('Looking for files list at:', filesListPath);
+        if (fs.existsSync(filesListPath)) {
+            console.log('Files list exists, loading...');
+            const data = fs.readFileSync(filesListPath, 'utf8');
+            const files = JSON.parse(data);
+            console.log('Loaded files:', files);
+            return files;
+        } else {
+            console.log('Files list does not exist at:', filesListPath);
+        }
+    } catch (error) {
+        console.error('Error loading files list:', error);
+    }
+    return [];
+}
+
 // IPC handlers for file operations
+ipcMain.handle('load-files-on-startup', async () => {
+  try {
+    console.log('Loading files on startup...');
+    const persistentFiles = loadFilesList();
+    console.log('Loaded persistent files on startup:', persistentFiles.length);
+    return persistentFiles;
+  } catch (error) {
+    console.error('Error loading files on startup:', error);
+    return [];
+  }
+});
+
 ipcMain.handle('scan-vulnerable-locations', async () => {
+  // Load persistent files first
+  const persistentFiles = loadFilesList();
+  console.log('Loaded persistent files:', persistentFiles.length);
+  
   const vulnerableLocations = [];
   const homeDir = process.env.HOME || process.env.USERPROFILE;
   
@@ -60,23 +110,42 @@ ipcMain.handle('scan-vulnerable-locations', async () => {
     }
   }
   
-  return vulnerableLocations;
+  // If we have persistent files, use them as the primary source
+  // Otherwise, use the scanned vulnerable locations
+  if (persistentFiles.length > 0) {
+    console.log('Returning persistent files');
+    return persistentFiles;
+  } else {
+    console.log('Returning scanned vulnerable locations');
+    return vulnerableLocations;
+  }
 });
 
 ipcMain.handle('add-custom-path', async (event, customPath) => {
   if (fs.existsSync(customPath)) {
-    return {
+    const fileInfo = {
       path: customPath,
       type: fs.statSync(customPath).isDirectory() ? 'directory' : 'file',
       encrypted: customPath.includes('_cyphered')
     };
+    
+    // Add to persistent storage
+    const persistentFiles = loadFilesList();
+    if (!persistentFiles.some(file => file.path === customPath)) {
+      persistentFiles.push(fileInfo);
+      saveFilesList(persistentFiles);
+    }
+    
+    return fileInfo;
   }
   throw new Error('Path does not exist');
 });
 
 ipcMain.handle('encrypt-file', async (event, filePath, key) => {
   try {
+    console.log('Encrypting file:', filePath);
     if (!fs.existsSync(filePath)) {
+      console.log('File does not exist at path:', filePath);
       throw new Error('File does not exist');
     }
     
@@ -176,6 +245,17 @@ ipcMain.handle('decrypt-file', async (event, filePath, key) => {
   }
 });
 
+ipcMain.handle('select-file', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openFile']
+  });
+  
+  if (!result.canceled && result.filePaths.length > 0) {
+    return result.filePaths[0];
+  }
+  return null;
+});
+
 ipcMain.handle('select-directory', async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ['openDirectory']
@@ -185,4 +265,36 @@ ipcMain.handle('select-directory', async () => {
     return result.filePaths[0];
   }
   return null;
+});
+
+// IPC handler to update file list after encryption/decryption
+ipcMain.handle('update-file-list', async (event, oldPath, newPath, isEncrypted) => {
+  try {
+    const persistentFiles = loadFilesList();
+    
+    // Normalize paths for comparison (handle both / and \ separators)
+    const normalizePath = (path) => path.replace(/\\/g, '/');
+    const normalizedOldPath = normalizePath(oldPath);
+    
+    // Remove the old file from the list (handle both separators)
+    const updatedFiles = persistentFiles.filter(file => {
+      const normalizedFilePath = normalizePath(file.path);
+      return normalizedFilePath !== normalizedOldPath;
+    });
+    
+    // Add the new file to the list
+    const fileInfo = {
+      path: newPath,
+      type: fs.statSync(newPath).isDirectory() ? 'directory' : 'file',
+      encrypted: isEncrypted
+    };
+    
+    updatedFiles.push(fileInfo);
+    saveFilesList(updatedFiles);
+    
+    return { success: true };
+  } catch (error) {
+    console.error('Error updating file list:', error);
+    return { success: false, error: error.message };
+  }
 });

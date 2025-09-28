@@ -14,8 +14,12 @@ class KeyCypherApp {
             this.scanVulnerableLocations();
         });
 
-        document.getElementById('addPathBtn').addEventListener('click', () => {
-            this.addCustomPath();
+        document.getElementById('addFileBtn').addEventListener('click', () => {
+            this.addFile();
+        });
+
+        document.getElementById('addDirectoryBtn').addEventListener('click', () => {
+            this.addDirectory();
         });
 
         // Allow Enter key to set encryption key
@@ -32,7 +36,7 @@ class KeyCypherApp {
         
         if (this.encryptionKey) {
             this.showMessage('Encryption key set successfully', 'success');
-            keyInput.value = ''; // Clear the input for security
+            // Don't clear the input so it can be used for decryption
         } else {
             this.showMessage('Please enter an encryption key', 'error');
         }
@@ -55,22 +59,41 @@ class KeyCypherApp {
         }
     }
 
-    async addCustomPath() {
+    async addFile() {
         if (!this.encryptionKey) {
             this.showMessage('Please set an encryption key first', 'error');
             return;
         }
 
         try {
-            const directoryPath = await window.electronAPI.selectDirectory();
-            if (directoryPath) {
-                const fileInfo = await window.electronAPI.addCustomPath(directoryPath);
+            const selectedFile = await window.electronAPI.selectFile();
+            if (selectedFile) {
+                const fileInfo = await window.electronAPI.addCustomPath(selectedFile);
                 this.files.push(fileInfo);
                 this.renderFileTable();
-                this.showMessage('Custom path added successfully', 'success');
+                this.showMessage('File added successfully', 'success');
             }
         } catch (error) {
-            this.showMessage('Error adding custom path: ' + error.message, 'error');
+            this.showMessage('Error adding file: ' + error.message, 'error');
+        }
+    }
+
+    async addDirectory() {
+        if (!this.encryptionKey) {
+            this.showMessage('Please set an encryption key first', 'error');
+            return;
+        }
+
+        try {
+            const selectedDirectory = await window.electronAPI.selectDirectory();
+            if (selectedDirectory) {
+                const fileInfo = await window.electronAPI.addCustomPath(selectedDirectory);
+                this.files.push(fileInfo);
+                this.renderFileTable();
+                this.showMessage('Directory added successfully', 'success');
+            }
+        } catch (error) {
+            this.showMessage('Error adding directory: ' + error.message, 'error');
         }
     }
 
@@ -81,11 +104,12 @@ class KeyCypherApp {
         }
 
         try {
+            console.log('Attempting to encrypt file:', filePath);
             const result = await window.electronAPI.encryptFile(filePath, this.encryptionKey);
             if (result.success) {
                 this.showMessage('File encrypted successfully', 'success');
                 // Update the file list to reflect the change
-                await this.scanVulnerableLocations();
+                await this.updateFileAfterOperation(filePath, result.encryptedPath, true);
             } else {
                 this.showMessage('Encryption failed: ' + result.error, 'error');
             }
@@ -105,7 +129,7 @@ class KeyCypherApp {
             if (result.success) {
                 this.showMessage('File decrypted successfully', 'success');
                 // Update the file list to reflect the change
-                await this.scanVulnerableLocations();
+                await this.updateFileAfterOperation(filePath, result.decryptedPath, false);
             } else {
                 this.showMessage('Decryption failed: ' + result.error, 'error');
             }
@@ -150,17 +174,50 @@ class KeyCypherApp {
     }
 
     formatPath(fullPath) {
-        // Shorten the path for display
-        const homeDir = process.env.HOME || process.env.USERPROFILE;
-        if (fullPath.startsWith(homeDir)) {
-            return '~' + fullPath.substring(homeDir.length);
-        }
+        // For display purposes, we'll just show the full path
+        // In a real implementation, we could get the home directory from main process
         return fullPath;
     }
 
     escapePath(path) {
         // Escape path for use in HTML attributes
-        return path.replace(/'/g, "\\'");
+        // Replace backslashes with forward slashes and escape quotes
+        return path.replace(/\\/g, '/').replace(/'/g, "\\'");
+    }
+
+    async updateFileAfterOperation(oldPath, newPath, isEncrypted) {
+        // Update the file in the local list and persistent storage
+        console.log('Updating file from:', oldPath, 'to:', newPath, 'encrypted:', isEncrypted);
+        
+        // Normalize paths for comparison (handle both / and \ separators)
+        const normalizePath = (path) => path.replace(/\\/g, '/');
+        const normalizedOldPath = normalizePath(oldPath);
+        
+        // Update local file list - remove old path (handle both separators)
+        this.files = this.files.filter(file => {
+            const normalizedFilePath = normalizePath(file.path);
+            return normalizedFilePath !== normalizedOldPath;
+        });
+        
+        // Add the new file to the list
+        const fileType = newPath.endsWith('_cyphered.zip') ? 'directory' :
+                        newPath.includes('_cyphered') ? 'file' : 'file';
+        
+        this.files.push({
+            path: newPath,
+            type: fileType,
+            encrypted: isEncrypted
+        });
+        
+        // Update persistent storage
+        try {
+            await window.electronAPI.updateFileList(oldPath, newPath, isEncrypted);
+        } catch (error) {
+            console.log('Error updating persistent storage:', error);
+        }
+        
+        this.renderFileTable();
+        console.log('Successfully updated file in table');
     }
 
     showMessage(message, type) {
@@ -184,6 +241,18 @@ class KeyCypherApp {
 }
 
 // Initialize the application when the DOM is loaded
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
     window.app = new KeyCypherApp();
+    
+    // Load persistent files automatically on startup
+    try {
+        const files = await window.electronAPI.loadFilesOnStartup();
+        if (files && files.length > 0) {
+            window.app.files = files;
+            window.app.renderFileTable();
+            console.log('Loaded', files.length, 'files on startup');
+        }
+    } catch (error) {
+        console.log('Error loading files on startup:', error);
+    }
 });
