@@ -321,7 +321,7 @@ async function addFilesToPersistentStorage(newFiles) {
 }
   
   // Backup functionality
-  ipcMain.handle('create-backup', async (event) => {
+  ipcMain.handle('create-backup', async (event, encryptionKey = null) => {
     try {
       const persistentFiles = loadFilesList();
       
@@ -332,11 +332,11 @@ async function addFilesToPersistentStorage(newFiles) {
       // Create timestamp for backup filename
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
       const backupFilename = `cypher_backup_${timestamp}.zip`;
-      const tempDir = path.join(app.getPath('temp'), 'keycypher_backup');
-      const backupPath = path.join(tempDir, backupFilename);
+      const homeDir = process.env.HOME || process.env.USERPROFILE;
+      const backupPath = path.join(homeDir, backupFilename);
       
-      // Ensure temp directory exists
-      await fsPromises.mkdir(tempDir, { recursive: true });
+      // Ensure home directory exists
+      await fsPromises.mkdir(homeDir, { recursive: true });
       
       console.log('Creating backup at:', backupPath);
       
@@ -388,13 +388,57 @@ async function addFilesToPersistentStorage(newFiles) {
       
       console.log('Backup created successfully');
       
-      // Open backup location in explorer
-      shell.showItemInFolder(backupPath);
+      let finalBackupPath = backupPath;
+      let isEncrypted = false;
+      
+      // If encryption key is provided, encrypt the backup immediately
+      if (encryptionKey) {
+        console.log('Encrypting backup with provided key...');
+        const algorithm = 'aes-256-cbc';
+        const iv = crypto.randomBytes(16);
+        const cipher = crypto.createCipher(algorithm, encryptionKey);
+        
+        const backupContent = await fsPromises.readFile(backupPath);
+        let encryptedContent = Buffer.concat([
+          cipher.update(backupContent),
+          cipher.final()
+        ]);
+        
+        finalBackupPath = backupPath.replace('.zip', '_cyphered.zip');
+        await fsPromises.writeFile(finalBackupPath, Buffer.concat([
+          iv,
+          encryptedContent
+        ]));
+        
+        // Remove the original unencrypted backup
+        await fsPromises.unlink(backupPath);
+        
+        isEncrypted = true;
+        console.log('Backup encrypted successfully:', finalBackupPath);
+      }
+      
+      // Add the backup file to the files list for encryption consideration
+      const backupFileInfo = {
+        path: finalBackupPath,
+        type: 'file',
+        encrypted: isEncrypted
+      };
+      
+      // Check if backup file already exists in the list
+      const existingPaths = new Set(persistentFiles.map(file => file.path.replace(/\\/g, '/')));
+      const normalizedBackupPath = finalBackupPath.replace(/\\/g, '/');
+      
+      if (!existingPaths.has(normalizedBackupPath)) {
+        persistentFiles.push(backupFileInfo);
+        saveFilesList(persistentFiles);
+        console.log('Backup file added to files list:', finalBackupPath, 'Encrypted:', isEncrypted);
+      }
       
       return {
         success: true,
-        backupPath: backupPath,
-        message: `Backup created: ${backupFilename}`
+        backupPath: finalBackupPath,
+        message: `Backup created${isEncrypted ? ' and encrypted' : ''}: ${path.basename(finalBackupPath)}`,
+        encrypted: isEncrypted
       };
       
     } catch (error) {
@@ -568,28 +612,53 @@ ipcMain.handle('decrypt-file', async (event, filePath, key) => {
       // Remove temporary ZIP file
       await fsPromises.unlink(tempZipPath);
     } else {
-      // For encrypted files
-      const encryptedData = await fsPromises.readFile(filePath, 'utf8');
-      const parts = encryptedData.split(':');
-      if (parts.length !== 2) {
-        throw new Error('Invalid encrypted file format');
+      // For encrypted files - handle both text and binary formats
+      const encryptedData = await fsPromises.readFile(filePath);
+      
+      // Check if it's a binary encrypted file (backup) or text encrypted file
+      if (filePath.endsWith('_cyphered.zip')) {
+        // Binary file encryption (backup files) - format: IV (16 bytes) + encrypted data
+        if (encryptedData.length < 16) {
+          throw new Error('Invalid encrypted file format');
+        }
+        
+        const iv = encryptedData.slice(0, 16);
+        const encryptedContent = encryptedData.slice(16);
+        const algorithm = 'aes-256-cbc';
+        const decipher = crypto.createDecipher(algorithm, key);
+        decipher.setAutoPadding(true);
+        
+        let decryptedContent = Buffer.concat([
+          decipher.update(encryptedContent),
+          decipher.final()
+        ]);
+        
+        decryptedPath = filePath.replace('_cyphered.zip', '.zip');
+        await fsPromises.writeFile(decryptedPath, decryptedContent);
+      } else {
+        // Text file encryption (original logic) - format: hex(iv):hex(encrypted)
+        const encryptedText = encryptedData.toString('utf8');
+        const parts = encryptedText.split(':');
+        if (parts.length !== 2) {
+          throw new Error('Invalid encrypted file format');
+        }
+        
+        const iv = Buffer.from(parts[0], 'hex');
+        const encryptedContent = parts[1];
+        const algorithm = 'aes-256-cbc';
+        const decipher = crypto.createDecipher(algorithm, key);
+        decipher.setAutoPadding(true);
+        
+        let decryptedContent = decipher.update(encryptedContent, 'hex', 'utf8');
+        decryptedContent += decipher.final('utf8');
+        
+        if (!decryptedContent) {
+          throw new Error('Invalid encryption key');
+        }
+        
+        decryptedPath = filePath.replace('_cyphered', '');
+        await fsPromises.writeFile(decryptedPath, decryptedContent);
       }
-      
-      const iv = Buffer.from(parts[0], 'hex');
-      const encryptedContent = parts[1];
-      const algorithm = 'aes-256-cbc';
-      const decipher = crypto.createDecipher(algorithm, key);
-      decipher.setAutoPadding(true);
-      
-      let decryptedContent = decipher.update(encryptedContent, 'hex', 'utf8');
-      decryptedContent += decipher.final('utf8');
-      
-      if (!decryptedContent) {
-        throw new Error('Invalid encryption key');
-      }
-      
-      decryptedPath = filePath.replace('_cyphered', '');
-      await fsPromises.writeFile(decryptedPath, decryptedContent);
     }
     
     // Add delay before attempting to delete the encrypted file

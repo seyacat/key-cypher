@@ -11,6 +11,10 @@ class KeyCypherApp {
             this.setEncryptionKey();
         });
 
+        document.getElementById('clearKey').addEventListener('click', () => {
+            this.clearEncryptionKey();
+        });
+
         document.getElementById('scanBtn').addEventListener('click', () => {
             if (!this.isScanning) {
                 this.scanVulnerableLocations();
@@ -44,6 +48,11 @@ class KeyCypherApp {
         document.getElementById('filterInput').addEventListener('input', () => {
             this.renderFileTable();
         });
+
+        // Add clear filter button event listener
+        document.getElementById('clearFilter').addEventListener('click', () => {
+            this.clearFilter();
+        });
     }
 
     setEncryptionKey() {
@@ -52,9 +61,28 @@ class KeyCypherApp {
         
         if (this.encryptionKey) {
             this.showMessage('Encryption key set successfully', 'success');
-            // Don't clear the input so it can be used for decryption
+            // Enable clear key button
+            this.updateClearKeyButton();
         } else {
             this.showMessage('Please enter an encryption key', 'error');
+        }
+    }
+
+    clearEncryptionKey() {
+        this.encryptionKey = '';
+        const keyInput = document.getElementById('encryptionKey');
+        if (keyInput) {
+            keyInput.value = '';
+        }
+        this.showMessage('Encryption key cleared', 'success');
+        // Disable clear key button
+        this.updateClearKeyButton();
+    }
+
+    updateClearKeyButton() {
+        const clearKeyBtn = document.getElementById('clearKey');
+        if (clearKeyBtn) {
+            clearKeyBtn.disabled = !this.encryptionKey;
         }
     }
 
@@ -423,10 +451,26 @@ class KeyCypherApp {
     async createBackup() {
         try {
             this.showMessage('Creating backup...', 'info');
-            const result = await window.electronAPI.createBackup();
+            
+            // Pass the encryption key to the backup process
+            const result = await window.electronAPI.createBackup(this.encryptionKey);
             
             if (result.success) {
-                this.showMessage(`Backup created successfully: ${result.backupPath}`, 'success');
+                let message = `Backup created successfully: ${result.backupPath}`;
+                if (result.encrypted) {
+                    message = `Backup created and encrypted successfully: ${result.backupPath}`;
+                }
+                this.showMessage(message, 'success');
+                
+                // Refresh the file list to show the new backup file
+                await this.refreshFileList();
+                
+                // Set filter to show backup files
+                const filterInput = document.getElementById('filterInput');
+                if (filterInput) {
+                    filterInput.value = 'backup';
+                    this.renderFileTable();
+                }
             } else {
                 this.showMessage('Backup failed: ' + result.error, 'error');
             }
@@ -450,6 +494,14 @@ class KeyCypherApp {
         return normalizedPath.includes(filterText) || fileType.includes(filterText);
     }
 
+    clearFilter() {
+        const filterInput = document.getElementById('filterInput');
+        if (filterInput) {
+            filterInput.value = '';
+            this.renderFileTable();
+        }
+    }
+
     showScanningSpinner(show) {
         const scanBtn = document.getElementById('scanBtn');
         this.isScanning = show;
@@ -467,6 +519,9 @@ class KeyCypherApp {
 // Initialize the application when the DOM is loaded
 document.addEventListener('DOMContentLoaded', async () => {
     window.app = new KeyCypherApp();
+    
+    // Initialize clear key button state
+    window.app.updateClearKeyButton();
     
     // Load persistent files automatically on startup
     try {
