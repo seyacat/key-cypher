@@ -26,6 +26,10 @@ class KeyCypherApp {
             this.refreshFileList();
         });
 
+        document.getElementById('backupBtn').addEventListener('click', () => {
+            this.createBackup();
+        });
+
         // Allow Enter key to set encryption key
         document.getElementById('encryptionKey').addEventListener('keypress', (e) => {
             if (e.key === 'Enter') {
@@ -393,6 +397,26 @@ class KeyCypherApp {
     showLoading() {
         const tableBody = document.getElementById('fileTableBody');
         tableBody.innerHTML = '<tr><td colspan="4" class="loading">Scanning...</td></tr>';
+    }
+
+    async createBackup() {
+        if (!this.encryptionKey) {
+            this.showMessage('Please set an encryption key first', 'error');
+            return;
+        }
+
+        try {
+            this.showMessage('Creating encrypted backup...', 'info');
+            const result = await window.electronAPI.createBackup(this.encryptionKey);
+            
+            if (result.success) {
+                this.showMessage(`Backup created successfully: ${result.backupPath}`, 'success');
+            } else {
+                this.showMessage('Backup failed: ' + result.error, 'error');
+            }
+        } catch (error) {
+            this.showMessage('Error creating backup: ' + error.message, 'error');
+        }
     }
 }
 

@@ -246,6 +246,7 @@ async function backgroundScan(homeDir, sender) {
     // Process 1: Scan directories
     const dirFiles = await scanVulnerableDirectories(homeDir);
     if (dirFiles.length > 0) {
+      await addFilesToPersistentStorage(dirFiles);
       sender.send('background-scan-update', dirFiles);
       console.log('Directory scan completed:', dirFiles.length, 'files');
     }
@@ -253,6 +254,7 @@ async function backgroundScan(homeDir, sender) {
     // Process 2: Scan single files
     const singleFiles = await scanSingleFiles(homeDir);
     if (singleFiles.length > 0) {
+      await addFilesToPersistentStorage(singleFiles);
       sender.send('background-scan-update', singleFiles);
       console.log('Single files scan completed:', singleFiles.length, 'files');
     }
@@ -260,6 +262,7 @@ async function backgroundScan(homeDir, sender) {
     // Process 3: Scan PEM/PPK files
     const pemPpkFiles = await scanPemPpkFiles(homeDir);
     if (pemPpkFiles.length > 0) {
+      await addFilesToPersistentStorage(pemPpkFiles);
       sender.send('background-scan-update', pemPpkFiles);
       console.log('PEM/PPK scan completed:', pemPpkFiles.length, 'files');
     }
@@ -280,6 +283,112 @@ async function backgroundScan(homeDir, sender) {
     });
   }
 }
+
+// Helper function to add files to persistent storage
+async function addFilesToPersistentStorage(newFiles) {
+  if (newFiles.length > 0) {
+    const persistentFiles = loadFilesList();
+    const existingPaths = new Set(persistentFiles.map(file => file.path.replace(/\\/g, '/')));
+    
+    let addedCount = 0;
+    newFiles.forEach(file => {
+      const normalizedPath = file.path.replace(/\\/g, '/');
+      if (!existingPaths.has(normalizedPath)) {
+        persistentFiles.push(file);
+        existingPaths.add(normalizedPath);
+        addedCount++;
+      }
+    });
+    
+    if (addedCount > 0) {
+      saveFilesList(persistentFiles);
+      console.log('Added', addedCount, 'files to persistent storage');
+    }
+  }
+}
+  
+  // Backup functionality
+  ipcMain.handle('create-backup', async (event, encryptionKey) => {
+    if (!encryptionKey) {
+      return { success: false, error: 'Encryption key is required for backup' };
+    }
+    try {
+      const persistentFiles = loadFilesList();
+      
+      if (persistentFiles.length === 0) {
+        return { success: false, error: 'No files to backup' };
+      }
+      
+      // Create timestamp for backup filename
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+      const backupFilename = `cypher_backup_${timestamp}.zip`;
+      const tempDir = path.join(app.getPath('temp'), 'keycypher_backup');
+      const backupPath = path.join(tempDir, backupFilename);
+      
+      // Ensure temp directory exists
+      await fsPromises.mkdir(tempDir, { recursive: true });
+      
+      console.log('Creating backup at:', backupPath);
+      
+      // Create ZIP archive directly to backup path
+      await new Promise((resolve, reject) => {
+        const output = fs.createWriteStream(backupPath);
+        const archive = archiver('zip', {
+          zlib: { level: 9 } // Maximum compression
+        });
+        
+        output.on('close', () => {
+          console.log('Backup created successfully:', archive.pointer() + ' total bytes');
+          resolve();
+        });
+        
+        archive.on('error', reject);
+        archive.on('warning', (err) => {
+          if (err.code === 'ENOENT') {
+            console.warn('Backup warning:', err);
+          } else {
+            reject(err);
+          }
+        });
+        
+        archive.pipe(output);
+        
+        // Add each file to the archive with relative path structure
+        persistentFiles.forEach(file => {
+          if (fs.existsSync(file.path) && fs.statSync(file.path).isFile()) {
+            try {
+              // Create relative path structure from drive root
+              const relativePath = path.relative(path.parse(file.path).root, file.path);
+              archive.file(file.path, { name: relativePath });
+              console.log('Added to backup:', relativePath);
+            } catch (error) {
+              console.warn('Skipping file for backup:', file.path, error.message);
+            }
+          }
+        });
+        
+        archive.finalize();
+      });
+      
+      console.log('Backup created successfully');
+      
+      // Open backup location in explorer
+      shell.showItemInFolder(backupPath);
+      
+      return {
+        success: true,
+        backupPath: backupPath,
+        message: `Backup created: ${backupFilename}`
+      };
+      
+    } catch (error) {
+      console.error('Backup error:', error);
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  });
 
 ipcMain.handle('add-custom-path', async (event, customPath) => {
   if (fs.existsSync(customPath)) {
