@@ -11,7 +11,7 @@ const { scanVulnerableDirectories } = require('./scan-directories');
 const { scanSingleFiles } = require('./scan-single-files');
 const { scanPemPpkFiles } = require('./scan-pem-ppk');
 const { scanSSHKeys } = require('./scan-ssh-keys');
-const { scanCypheredFiles } = require('./scan-cyphered-files');
+const { scanCypheredFiles } = require('./scan-cypher-ed-files');
 const { scanEnvFiles } = require('./scan-env-files');
 
 // Helper function to delay execution
