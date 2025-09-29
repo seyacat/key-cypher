@@ -235,6 +235,25 @@
             color: white;
         }
 
+        .filter-section {
+            margin-bottom: 20px;
+        }
+
+        .filter-input {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #444;
+            border-radius: 4px;
+            background-color: #333;
+            color: white;
+            font-size: 14px;
+        }
+
+        .filter-input:focus {
+            outline: none;
+            border-color: #4CAF50;
+        }
+
         .file-type {
             padding: 4px 8px;
             border-radius: 12px;
@@ -287,6 +306,10 @@
             <button id="addDirectoryBtn" class="btn btn-secondary">Add Directory</button>
             <button id="refreshBtn" class="btn btn-info">Refresh List</button>
             <button id="backupBtn" class="btn btn-warning">Backup Files</button>
+        </div>
+
+        <div class="filter-section">
+            <input type="text" id="filterInput" class="filter-input" placeholder="Filter files by name or path..." />
         </div>
 
         <div id="messageArea"></div>

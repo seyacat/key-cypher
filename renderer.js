@@ -36,6 +36,11 @@ class KeyCypherApp {
                 this.setEncryptionKey();
             }
         });
+
+        // Add filter input event listener
+        document.getElementById('filterInput').addEventListener('input', () => {
+            this.renderFileTable();
+        });
     }
 
     setEncryptionKey() {
@@ -202,9 +207,20 @@ class KeyCypherApp {
         const uniqueFiles = this.removeDuplicates(this.files);
         const sortedFiles = this.sortFilesAlphabetically(uniqueFiles);
 
+        // Apply filter if any
+        const filterText = this.getFilterText();
+        const filteredFiles = filterText ?
+            sortedFiles.filter(file => this.fileMatchesFilter(file, filterText)) :
+            sortedFiles;
+
+        if (filteredFiles.length === 0) {
+            tableBody.innerHTML = '<tr><td colspan="4" class="loading">No files match the filter</td></tr>';
+            return;
+        }
+
         // Check file status for each file
         const filesWithStatus = await Promise.all(
-            sortedFiles.map(async (file) => {
+            filteredFiles.map(async (file) => {
                 try {
                     const status = await window.electronAPI.checkFileStatus(file.path);
                     return { ...file, status };
@@ -412,6 +428,21 @@ class KeyCypherApp {
         } catch (error) {
             this.showMessage('Error creating backup: ' + error.message, 'error');
         }
+    }
+
+    getFilterText() {
+        const filterInput = document.getElementById('filterInput');
+        return filterInput ? filterInput.value.trim().toLowerCase() : '';
+    }
+
+    fileMatchesFilter(file, filterText) {
+        if (!filterText) return true;
+        
+        const normalizedPath = this.formatPath(file.path).toLowerCase();
+        const fileType = file.type.toLowerCase();
+        
+        // Check if filter text matches path or file type
+        return normalizedPath.includes(filterText) || fileType.includes(filterText);
     }
 }
 
