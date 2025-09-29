@@ -10,6 +10,7 @@ const unzipper = require('unzipper');
 const { scanVulnerableDirectories } = require('./scan-directories');
 const { scanSingleFiles } = require('./scan-single-files');
 const { scanPemPpkFiles } = require('./scan-pem-ppk');
+const { scanCypheredFiles } = require('./scan-cyphered-files');
 
 // Helper function to delay execution
 function delay(ms) {
@@ -194,7 +195,8 @@ ipcMain.handle('scan-vulnerable-locations', async () => {
   const scanProcesses = [
     scanVulnerableDirectories(homeDir),
     scanSingleFiles(homeDir),
-    scanPemPpkFiles(homeDir)
+    scanPemPpkFiles(homeDir),
+    scanCypheredFiles(homeDir)
   ];
   
   // Wait for all processes to complete
@@ -265,6 +267,14 @@ async function backgroundScan(homeDir, sender) {
       await addFilesToPersistentStorage(pemPpkFiles);
       sender.send('background-scan-update', pemPpkFiles);
       console.log('PEM/PPK scan completed:', pemPpkFiles.length, 'files');
+    }
+    
+    // Process 4: Scan cyphered files
+    const cypheredFiles = await scanCypheredFiles(homeDir);
+    if (cypheredFiles.length > 0) {
+      await addFilesToPersistentStorage(cypheredFiles);
+      sender.send('background-scan-update', cypheredFiles);
+      console.log('Cyphered files scan completed:', cypheredFiles.length, 'files');
     }
     
     // Send completion signal

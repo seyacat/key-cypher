@@ -1,6 +1,6 @@
 {
   "name": "key-cypher",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Electron application for scanning and encrypting vulnerable credential files",
   "main": "main.js",
   "scripts": {

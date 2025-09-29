@@ -13,7 +13,7 @@ async function scanVulnerableDirectories(homeDir) {
     },
     {
       dir: path.join(homeDir, '.ssh'),
-      files: ['id_rsa', 'id_dsa', 'id_ecdsa', 'id_ed25519', 'authorized_keys', 'known_hosts', 'config']
+      files: ['id_rsa', 'id_dsa', 'id_ecdsa', 'id_ed25519', 'authorized_keys', 'config']
     },
     {
       dir: path.join(homeDir, '.kube'),
