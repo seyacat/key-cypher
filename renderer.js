@@ -400,14 +400,9 @@ class KeyCypherApp {
     }
 
     async createBackup() {
-        if (!this.encryptionKey) {
-            this.showMessage('Please set an encryption key first', 'error');
-            return;
-        }
-
         try {
-            this.showMessage('Creating encrypted backup...', 'info');
-            const result = await window.electronAPI.createBackup(this.encryptionKey);
+            this.showMessage('Creating backup...', 'info');
+            const result = await window.electronAPI.createBackup();
             
             if (result.success) {
                 this.showMessage(`Backup created successfully: ${result.backupPath}`, 'success');

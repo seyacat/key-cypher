@@ -308,10 +308,7 @@ async function addFilesToPersistentStorage(newFiles) {
 }
   
   // Backup functionality
-  ipcMain.handle('create-backup', async (event, encryptionKey) => {
-    if (!encryptionKey) {
-      return { success: false, error: 'Encryption key is required for backup' };
-    }
+  ipcMain.handle('create-backup', async (event) => {
     try {
       const persistentFiles = loadFilesList();
       
@@ -366,6 +363,12 @@ async function addFilesToPersistentStorage(newFiles) {
             }
           }
         });
+
+        // Add the files.json metadata file to the backup
+        if (fs.existsSync(filesListPath)) {
+          archive.file(filesListPath, { name: 'files.json' });
+          console.log('Added metadata file to backup: files.json');
+        }
         
         archive.finalize();
       });

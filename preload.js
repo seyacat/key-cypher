@@ -4,7 +4,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   loadFilesOnStartup: () => ipcRenderer.invoke('load-files-on-startup'),
   scanVulnerableLocations: () => ipcRenderer.invoke('scan-vulnerable-locations'),
   startBackgroundScan: () => ipcRenderer.invoke('start-background-scan'),
-  createBackup: (encryptionKey) => ipcRenderer.invoke('create-backup', encryptionKey),
+  createBackup: () => ipcRenderer.invoke('create-backup'),
   addCustomPath: (customPath) => ipcRenderer.invoke('add-custom-path', customPath),
   encryptFile: (filePath, key) => ipcRenderer.invoke('encrypt-file', filePath, key),
   decryptFile: (filePath, key) => ipcRenderer.invoke('decrypt-file', filePath, key),
