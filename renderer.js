@@ -48,24 +48,37 @@ class KeyCypherApp {
 
     async scanVulnerableLocations() {
         try {
-            this.showLoading();
-            const scannedFiles = await window.electronAPI.scanVulnerableLocations();
+            this.showMessage('Scanning for vulnerable files in background...', 'info');
             
-            // Add scanned files to existing list, avoiding duplicates
-            const existingPaths = new Set(this.files.map(file => file.path.replace(/\\/g, '/')));
+            // Start background scan - don't await, let it run in background
+            window.electronAPI.startBackgroundScan();
             
-            scannedFiles.forEach(file => {
-                const normalizedPath = file.path.replace(/\\/g, '/');
-                if (!existingPaths.has(normalizedPath)) {
-                    this.files.push(file);
-                    existingPaths.add(normalizedPath);
-                }
-            });
-            
-            this.renderFileTable();
-            this.showMessage(`Added ${scannedFiles.length} vulnerable locations to list`, 'success');
+            // Don't block the UI - user can continue working
+            this.showMessage('Background scan started. Files will be added as found.', 'success');
         } catch (error) {
-            this.showMessage('Error scanning locations: ' + error.message, 'error');
+            this.showMessage('Error starting scan: ' + error.message, 'error');
+        }
+    }
+
+    // Method to add files from background scan
+    addFilesFromBackgroundScan(newFiles) {
+        if (!newFiles || newFiles.length === 0) return;
+        
+        const existingPaths = new Set(this.files.map(file => file.path.replace(/\\/g, '/')));
+        let newFilesCount = 0;
+        
+        newFiles.forEach(file => {
+            const normalizedPath = file.path.replace(/\\/g, '/');
+            if (!existingPaths.has(normalizedPath)) {
+                this.files.push(file);
+                existingPaths.add(normalizedPath);
+                newFilesCount++;
+            }
+        });
+        
+        if (newFilesCount > 0) {
+            this.renderFileTable();
+            this.showMessage(`Added ${newFilesCount} new files from background scan`, 'success');
         }
     }
 
@@ -398,4 +411,17 @@ document.addEventListener('DOMContentLoaded', async () => {
     } catch (error) {
         console.log('Error loading files on startup:', error);
     }
+    
+    // Set up background scan listeners
+    window.electronAPI.onBackgroundScanUpdate((event, files) => {
+        window.app.addFilesFromBackgroundScan(files);
+    });
+    
+    window.electronAPI.onBackgroundScanComplete((event, result) => {
+        if (result.success) {
+            window.app.showMessage('Background scan completed', 'success');
+        } else {
+            window.app.showMessage('Background scan failed: ' + result.error, 'error');
+        }
+    });
 });

@@ -6,6 +6,11 @@ const crypto = require('crypto');
 const archiver = require('archiver');
 const unzipper = require('unzipper');
 
+// Import scan modules
+const { scanVulnerableDirectories } = require('./scan-directories');
+const { scanSingleFiles } = require('./scan-single-files');
+const { scanPemPpkFiles } = require('./scan-pem-ppk');
+
 // Helper function to delay execution
 function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -182,60 +187,32 @@ ipcMain.handle('load-files-on-startup', async () => {
 });
 
 ipcMain.handle('scan-vulnerable-locations', async () => {
-  const vulnerableFiles = [];
   const homeDir = process.env.HOME || process.env.USERPROFILE;
+  const allVulnerableFiles = [];
   
-  // Scan for specific files in vulnerable directories
-  const scanDirectories = [
-    {
-      dir: path.join(homeDir, '.aws'),
-      files: ['credentials']
-    },
-    {
-      dir: path.join(homeDir, '.ssh'),
-      files: ['id_rsa', 'id_dsa', 'id_ecdsa', 'id_ed25519', 'authorized_keys']
-    }
+  // Run all scan processes asynchronously using separate modules
+  const scanProcesses = [
+    scanVulnerableDirectories(homeDir),
+    scanSingleFiles(homeDir),
+    scanPemPpkFiles(homeDir)
   ];
   
-  // Single files to check
-  const singleFiles = [
-    path.join(homeDir, '.git-credentials'),
-    path.join(homeDir, '.config', 'gh', 'hosts.yml')
-  ];
+  // Wait for all processes to complete
+  const results = await Promise.allSettled(scanProcesses);
   
-  // Scan directories for specific files
-  for (const scanDir of scanDirectories) {
-    if (fs.existsSync(scanDir.dir) && fs.statSync(scanDir.dir).isDirectory()) {
-      for (const fileName of scanDir.files) {
-        const filePath = path.join(scanDir.dir, fileName);
-        if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
-          vulnerableFiles.push({
-            path: filePath,
-            type: 'file',
-            encrypted: filePath.includes('_cyphered')
-          });
-        }
-      }
+  // Collect all files from successful processes
+  results.forEach(result => {
+    if (result.status === 'fulfilled' && result.value.length > 0) {
+      allVulnerableFiles.push(...result.value);
     }
-  }
-  
-  // Check single files
-  for (const filePath of singleFiles) {
-    if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
-      vulnerableFiles.push({
-        path: filePath,
-        type: 'file',
-        encrypted: filePath.includes('_cyphered')
-      });
-    }
-  }
+  });
   
   // Add scanned files to persistent storage
-  if (vulnerableFiles.length > 0) {
+  if (allVulnerableFiles.length > 0) {
     const persistentFiles = loadFilesList();
     const existingPaths = new Set(persistentFiles.map(file => file.path.replace(/\\/g, '/')));
     
-    vulnerableFiles.forEach(file => {
+    allVulnerableFiles.forEach(file => {
       const normalizedPath = file.path.replace(/\\/g, '/');
       if (!existingPaths.has(normalizedPath)) {
         persistentFiles.push(file);
@@ -246,9 +223,63 @@ ipcMain.handle('scan-vulnerable-locations', async () => {
     saveFilesList(persistentFiles);
   }
   
-  console.log('Scanned vulnerable files:', vulnerableFiles.length);
-  return vulnerableFiles;
+  console.log('Total scanned vulnerable files:', allVulnerableFiles.length);
+  return allVulnerableFiles;
 });
+
+// Background scan functionality
+ipcMain.handle('start-background-scan', async (event) => {
+  const homeDir = process.env.HOME || process.env.USERPROFILE;
+  
+  // Start background scan without blocking
+  backgroundScan(homeDir, event.sender);
+  
+  return { success: true, message: 'Background scan started' };
+});
+
+// Background scan function that sends incremental updates
+async function backgroundScan(homeDir, sender) {
+  console.log('Starting background scan...');
+  
+  // Run each scan process separately and send updates as they complete
+  try {
+    // Process 1: Scan directories
+    const dirFiles = await scanVulnerableDirectories(homeDir);
+    if (dirFiles.length > 0) {
+      sender.send('background-scan-update', dirFiles);
+      console.log('Directory scan completed:', dirFiles.length, 'files');
+    }
+    
+    // Process 2: Scan single files
+    const singleFiles = await scanSingleFiles(homeDir);
+    if (singleFiles.length > 0) {
+      sender.send('background-scan-update', singleFiles);
+      console.log('Single files scan completed:', singleFiles.length, 'files');
+    }
+    
+    // Process 3: Scan PEM/PPK files
+    const pemPpkFiles = await scanPemPpkFiles(homeDir);
+    if (pemPpkFiles.length > 0) {
+      sender.send('background-scan-update', pemPpkFiles);
+      console.log('PEM/PPK scan completed:', pemPpkFiles.length, 'files');
+    }
+    
+    // Send completion signal
+    sender.send('background-scan-complete', {
+      success: true,
+      message: 'Background scan completed'
+    });
+    
+    console.log('Background scan completed successfully');
+    
+  } catch (error) {
+    console.error('Background scan error:', error);
+    sender.send('background-scan-complete', {
+      success: false,
+      error: error.message
+    });
+  }
+}
 
 ipcMain.handle('add-custom-path', async (event, customPath) => {
   if (fs.existsSync(customPath)) {
