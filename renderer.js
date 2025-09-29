@@ -2,6 +2,7 @@ class KeyCypherApp {
     constructor() {
         this.encryptionKey = '';
         this.files = [];
+        this.isScanning = false;
         this.initEventListeners();
     }
 
@@ -11,7 +12,9 @@ class KeyCypherApp {
         });
 
         document.getElementById('scanBtn').addEventListener('click', () => {
-            this.scanVulnerableLocations();
+            if (!this.isScanning) {
+                this.scanVulnerableLocations();
+            }
         });
 
         document.getElementById('addFileBtn').addEventListener('click', () => {
@@ -57,6 +60,7 @@ class KeyCypherApp {
 
     async scanVulnerableLocations() {
         try {
+            this.showScanningSpinner(true);
             this.showMessage('Scanning for vulnerable files in background...', 'info');
             
             // Start background scan - don't await, let it run in background
@@ -65,6 +69,7 @@ class KeyCypherApp {
             // Don't block the UI - user can continue working
             this.showMessage('Background scan started. Files will be added as found.', 'success');
         } catch (error) {
+            this.showScanningSpinner(false);
             this.showMessage('Error starting scan: ' + error.message, 'error');
         }
     }
@@ -444,6 +449,19 @@ class KeyCypherApp {
         // Check if filter text matches path or file type
         return normalizedPath.includes(filterText) || fileType.includes(filterText);
     }
+
+    showScanningSpinner(show) {
+        const scanBtn = document.getElementById('scanBtn');
+        this.isScanning = show;
+        
+        if (show) {
+            scanBtn.innerHTML = '<span class="spinner"></span>Scanning...';
+            scanBtn.disabled = true;
+        } else {
+            scanBtn.innerHTML = 'Scan Vulnerable Locations';
+            scanBtn.disabled = false;
+        }
+    }
 }
 
 // Initialize the application when the DOM is loaded
@@ -468,6 +486,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
     
     window.electronAPI.onBackgroundScanComplete((event, result) => {
+        window.app.showScanningSpinner(false);
         if (result.success) {
             window.app.showMessage('Background scan completed', 'success');
         } else {

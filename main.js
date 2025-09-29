@@ -10,7 +10,9 @@ const unzipper = require('unzipper');
 const { scanVulnerableDirectories } = require('./scan-directories');
 const { scanSingleFiles } = require('./scan-single-files');
 const { scanPemPpkFiles } = require('./scan-pem-ppk');
+const { scanSSHKeys } = require('./scan-ssh-keys');
 const { scanCypheredFiles } = require('./scan-cyphered-files');
+const { scanEnvFiles } = require('./scan-env-files');
 
 // Helper function to delay execution
 function delay(ms) {
@@ -196,7 +198,9 @@ ipcMain.handle('scan-vulnerable-locations', async () => {
     scanVulnerableDirectories(homeDir),
     scanSingleFiles(homeDir),
     scanPemPpkFiles(homeDir),
-    scanCypheredFiles(homeDir)
+    scanSSHKeys(homeDir),
+    scanCypheredFiles(homeDir),
+    scanEnvFiles(homeDir)
   ];
   
   // Wait for all processes to complete
@@ -243,47 +247,46 @@ ipcMain.handle('start-background-scan', async (event) => {
 async function backgroundScan(homeDir, sender) {
   console.log('Starting background scan...');
   
-  // Run each scan process separately and send updates as they complete
+  // Run all scan processes in parallel but process results as they complete
   try {
-    // Process 1: Scan directories
-    const dirFiles = await scanVulnerableDirectories(homeDir);
-    if (dirFiles.length > 0) {
-      await addFilesToPersistentStorage(dirFiles);
-      sender.send('background-scan-update', dirFiles);
-      console.log('Directory scan completed:', dirFiles.length, 'files');
-    }
+    const scanProcesses = [
+      { name: 'Directory scan', func: scanVulnerableDirectories(homeDir) },
+      { name: 'Single files scan', func: scanSingleFiles(homeDir) },
+      { name: 'PEM/PPK scan', func: scanPemPpkFiles(homeDir) },
+      { name: 'SSH keys scan', func: scanSSHKeys(homeDir) },
+      { name: 'Cyphered files scan', func: scanCypheredFiles(homeDir) },
+      { name: 'Env files scan', func: scanEnvFiles(homeDir) }
+    ];
     
-    // Process 2: Scan single files
-    const singleFiles = await scanSingleFiles(homeDir);
-    if (singleFiles.length > 0) {
-      await addFilesToPersistentStorage(singleFiles);
-      sender.send('background-scan-update', singleFiles);
-      console.log('Single files scan completed:', singleFiles.length, 'files');
-    }
+    let totalFilesFound = 0;
     
-    // Process 3: Scan PEM/PPK files
-    const pemPpkFiles = await scanPemPpkFiles(homeDir);
-    if (pemPpkFiles.length > 0) {
-      await addFilesToPersistentStorage(pemPpkFiles);
-      sender.send('background-scan-update', pemPpkFiles);
-      console.log('PEM/PPK scan completed:', pemPpkFiles.length, 'files');
-    }
-    
-    // Process 4: Scan cyphered files
-    const cypheredFiles = await scanCypheredFiles(homeDir);
-    if (cypheredFiles.length > 0) {
-      await addFilesToPersistentStorage(cypheredFiles);
-      sender.send('background-scan-update', cypheredFiles);
-      console.log('Cyphered files scan completed:', cypheredFiles.length, 'files');
+    // Process each scan as it completes
+    for (const scan of scanProcesses) {
+      try {
+        const files = await scan.func;
+        
+        if (files.length > 0) {
+          totalFilesFound += files.length;
+          
+          // Add to persistent storage and send update immediately
+          addFilesToPersistentStorage(files);
+          sender.send('background-scan-update', files);
+          
+          console.log(`${scan.name} completed:`, files.length, 'files');
+        }
+      } catch (error) {
+        console.error(`${scan.name} failed:`, error);
+      }
     }
     
     // Send completion signal
     sender.send('background-scan-complete', {
       success: true,
-      message: 'Background scan completed'
+      message: 'Background scan completed',
+      totalFiles: totalFilesFound
     });
     
-    console.log('Background scan completed successfully');
+    console.log('Background scan completed successfully. Total files found:', totalFilesFound);
     
   } catch (error) {
     console.error('Background scan error:', error);
