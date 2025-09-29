@@ -49,10 +49,21 @@ class KeyCypherApp {
     async scanVulnerableLocations() {
         try {
             this.showLoading();
-            const files = await window.electronAPI.scanVulnerableLocations();
-            this.files = files;
+            const scannedFiles = await window.electronAPI.scanVulnerableLocations();
+            
+            // Add scanned files to existing list, avoiding duplicates
+            const existingPaths = new Set(this.files.map(file => file.path.replace(/\\/g, '/')));
+            
+            scannedFiles.forEach(file => {
+                const normalizedPath = file.path.replace(/\\/g, '/');
+                if (!existingPaths.has(normalizedPath)) {
+                    this.files.push(file);
+                    existingPaths.add(normalizedPath);
+                }
+            });
+            
             this.renderFileTable();
-            this.showMessage(`Found ${files.length} vulnerable locations`, 'success');
+            this.showMessage(`Added ${scannedFiles.length} vulnerable locations to list`, 'success');
         } catch (error) {
             this.showMessage('Error scanning locations: ' + error.message, 'error');
         }

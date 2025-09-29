@@ -182,10 +182,6 @@ ipcMain.handle('load-files-on-startup', async () => {
 });
 
 ipcMain.handle('scan-vulnerable-locations', async () => {
-  // Load persistent files first
-  const persistentFiles = loadFilesList();
-  console.log('Loaded persistent files:', persistentFiles.length);
-  
   const vulnerableFiles = [];
   const homeDir = process.env.HOME || process.env.USERPROFILE;
   
@@ -234,15 +230,24 @@ ipcMain.handle('scan-vulnerable-locations', async () => {
     }
   }
   
-  // If we have persistent files, use them as the primary source
-  // Otherwise, use the scanned vulnerable files
-  if (persistentFiles.length > 0) {
-    console.log('Returning persistent files');
-    return persistentFiles;
-  } else {
-    console.log('Returning scanned vulnerable files:', vulnerableFiles.length);
-    return vulnerableFiles;
+  // Add scanned files to persistent storage
+  if (vulnerableFiles.length > 0) {
+    const persistentFiles = loadFilesList();
+    const existingPaths = new Set(persistentFiles.map(file => file.path.replace(/\\/g, '/')));
+    
+    vulnerableFiles.forEach(file => {
+      const normalizedPath = file.path.replace(/\\/g, '/');
+      if (!existingPaths.has(normalizedPath)) {
+        persistentFiles.push(file);
+        existingPaths.add(normalizedPath);
+      }
+    });
+    
+    saveFilesList(persistentFiles);
   }
+  
+  console.log('Scanned vulnerable files:', vulnerableFiles.length);
+  return vulnerableFiles;
 });
 
 ipcMain.handle('add-custom-path', async (event, customPath) => {
